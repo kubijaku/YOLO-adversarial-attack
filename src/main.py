@@ -7,7 +7,7 @@ from utils.generate_CM import generate_cm
 from utils.train_model import train_model
 
 
-def parse_args():
+def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Adversarial attack generator for YOLO models"
     )
