@@ -13,7 +13,9 @@ def find_images_recursive(root):
     p = Path(root)
     if not p.exists():
         return []
-    files = [str(f) for f in p.rglob("*") if f.is_file() and f.suffix.lower() in SUFFIXES]
+    files = [
+        str(f) for f in p.rglob("*") if f.is_file() and f.suffix.lower() in SUFFIXES
+    ]
     return sorted(files)
 
 
@@ -38,7 +40,7 @@ def read_yolo_label_file(path):
         for line in f:
             parts = line.strip().split()
             if len(parts) >= 5:
-                cls = int(float(parts[0]));
+                cls = int(float(parts[0]))
                 xc, yc, w, h = map(float, parts[1:5])
                 boxes.append((cls, xc, yc, w, h))
     return boxes
@@ -86,10 +88,10 @@ def flatten_pred_tensor(p: torch.Tensor):
     return flat
 
 
-def compute_proxy_from_preds(raw, gt_boxes=None):
+def compute_proxy_from_preds(raw, device: str | torch._C.device, gt_boxes=None):
     """
     raw: either torch.Tensor or list/tuple of tensors (various shapes).
-    in our case it is a list of 3 tensors (each one for diffrent spatial resolutions:
+    in our case it is a list of 3 tensors (each one for different spatial resolutions:
         - small objects (high-resolution feature map),
         - medium objects,
         - large objects (low-resolution feature map).
@@ -103,8 +105,8 @@ def compute_proxy_from_preds(raw, gt_boxes=None):
     else:
         raise RuntimeError("Unsupported preds type")
 
-    device = pred_list[0].device if pred_list else torch.device(DEVICE)
-    total_loss = torch.tensor(0.0, device=device)
+    torch_device = pred_list[0].device if pred_list else torch.device(device)
+    total_loss = torch.tensor(0.0, device=torch_device)
 
     per_head_scores = []
     for p in pred_list:
@@ -117,7 +119,7 @@ def compute_proxy_from_preds(raw, gt_boxes=None):
 
         B, P, C = flat.shape
         if C < 5:
-            print('never comes in here')
+            print("never comes in here")
             # treat as generic activation summary
             per_head_scores.append(flat.abs().sum(dim=(1, 2)))  # (B,)
             continue
@@ -140,8 +142,7 @@ def compute_proxy_from_preds(raw, gt_boxes=None):
     # If ground truth boxes available, penalize the model's highest score for those classes.
     if gt_boxes:
         # For each GT class, find its best score across all heads & preds
-        for (cls, xc, yc, w, h) in gt_boxes:
-            cls_idx = int(cls)
+        for cls, xc, yc, w, h in gt_boxes:
             best_vals = []
             for head_score in per_head_scores:
                 # head_score is (B,P); class-specific proxy: need class_probs for that head if available
@@ -163,41 +164,31 @@ def compute_proxy_from_preds(raw, gt_boxes=None):
     return total_loss
 
 
-def fgsm_attack(model: str, img_dir: str, labels_dir: str, out: str, pert_with_eps_dir: str, pert_dir: str, eps: float,
-                max_img: int, device: str):
-    global MODEL_PATH
-    global VAL_IMAGES_DIR
-    global VAL_LABELS_DIR
-    global OUTPUT_DIR
-    global PER_IMG_DIR_WITH_EPS
-    global PER_IMG_DIR
-    global EPSILON
-    global MAX_IMAGES
-    global DEVICE
-
-    MODEL_PATH = model
-    VAL_IMAGES_DIR = img_dir
-    VAL_LABELS_DIR = labels_dir
-    OUTPUT_DIR = out
-    PER_IMG_DIR_WITH_EPS = pert_with_eps_dir
-    PER_IMG_DIR = pert_dir
-    EPSILON = eps
-    MAX_IMAGES = max_img
-    DEVICE = device
-
-    # print current dir
-    print("Device:", DEVICE)
-    print("Loading model:", MODEL_PATH)
-    model = YOLO(MODEL_PATH)
-    model.to(DEVICE)
+def fgsm_attack(
+    model_path: str,
+    img_dir: str,
+    labels_dir: str,
+    adv_img_dir: str,
+    pert_with_eps_dir: str,
+    pert_dir: str,
+    eps: float,
+    max_img: int,
+    device: str,
+):
+    print("Device:", device)
+    print("Loading model:", model_path)
+    model = YOLO(model_path)
+    model.to(device)
     internal = getattr(model, "model", None)
     if internal is None:
-        print("Warning: model.model not found; attempting wrapper forward which may be non-differentiable.")
+        print(
+            "Warning: model.model not found; attempting wrapper forward which may be non-differentiable."
+        )
     else:
         print("Using internal model:", type(internal))
 
-    imgs = find_images_recursive(VAL_IMAGES_DIR)
-    print(f"Found {len(imgs)} images under {VAL_IMAGES_DIR}")
+    imgs = find_images_recursive(img_dir)
+    print(f"Found {len(imgs)} images under {img_dir}")
     if len(imgs) > 0:
         print("First few images:")
         for p in imgs[:10]:
@@ -206,42 +197,31 @@ def fgsm_attack(model: str, img_dir: str, labels_dir: str, out: str, pert_with_e
         print("No images found. Exiting.")
         return
 
-    if MAX_IMAGES:
-        imgs = imgs[:MAX_IMAGES]
+    if max_img:
+        imgs = imgs[:max_img]
 
     for i, img_path in enumerate(imgs, 1):
         print(f"\n[{i}/{len(imgs)}] {img_path}")
         base = Path(img_path).stem
-        label_path = os.path.join(VAL_LABELS_DIR, base + ".txt")
+        label_path = os.path.join(labels_dir, base + ".txt")
         gt_boxes = read_yolo_label_file(label_path)
         if gt_boxes:
             print(f" - Found {len(gt_boxes)} GT boxes")
         else:
             print(" - No GT boxes (will use fallback loss)")
 
-        img_t, orig = load_image_tensor(img_path, DEVICE)
+        img_t, orig = load_image_tensor(img_path, device=device)
         img_t = img_t.clone().detach()
         img_t.requires_grad = True
 
         # Get raw preds via internal model (differentiable)
-        try:
-            internal_model = getattr(model, "model", model)
-            internal_model.train()
-            raw = internal_model(img_t)  # raw can be tensor or list/tuple of tensors
-        except Exception as e:
-            print(" - Internal forward failed:", e)
-            try:
-                # fallback to wrapper call (non-diff) -> skip
-                _ = model(img_path)
-                print(" - Wrapper call returned non-differentiable results. Skipping image.")
-                continue
-            except Exception:
-                print(" - Wrapper call also failed. Skipping image.")
-                continue
+        internal_model = getattr(model, "model", model)
+        internal_model.train()
+        raw = internal_model(img_t)  # raw can be tensor or list/tuple of tensors
 
         # Build proxy loss and do FGSM
         try:
-            loss = compute_proxy_from_preds(raw, gt_boxes)
+            loss = compute_proxy_from_preds(raw=raw, gt_boxes=gt_boxes, device=device)
             # maximize loss -> gradient step in direction of sign(grad)
             loss.backward()
             grad = img_t.grad.data
@@ -250,24 +230,27 @@ def fgsm_attack(model: str, img_dir: str, labels_dir: str, out: str, pert_with_e
                 continue
             perturbations = torch.sign(grad)
 
-            out_path = os.path.join(PER_IMG_DIR, f"{base}_eps{int(EPSILON * 255)}.png")
+            out_path = os.path.join(pert_dir, f"{base}_eps{int(eps * 255)}.png")
             save_tensor_image(perturbations, out_path)
 
-            out_path = os.path.join(PER_IMG_DIR_WITH_EPS, f"{base}_eps{int(EPSILON * 255)}.png")
-            save_tensor_image(EPSILON * perturbations, out_path)
+            out_path = os.path.join(
+                pert_with_eps_dir, f"{base}_eps{int(eps * 255)}.png"
+            )
+            save_tensor_image(eps * perturbations, out_path)
 
             # adding perturbations
-            adv = img_t + EPSILON * perturbations
+            adv = img_t + eps * perturbations
             # normalizing the image
             adv = torch.clamp(adv, 0.0, 1.0).detach()
 
-            out_path = os.path.join(OUTPUT_DIR, f"{base}_eps{int(EPSILON * 255)}.png")
+            out_path = os.path.join(adv_img_dir, f"{base}_eps{int(eps * 255)}.png")
             save_tensor_image(adv, out_path)
 
             print(
-                f" - Saved adversarial to {out_path} (loss {float(loss):.4f}, grad_max {float(grad.abs().max()):.6f})")
+                f" - Saved adversarial to {out_path} (loss {float(loss):.4f}, grad_max {float(grad.abs().max()):.6f})"
+            )
         except Exception as e:
             print(" - Attack failed for this image:", e)
             continue
 
-    print("\nDone. Check folder:", OUTPUT_DIR)
+    print("\nDone. Check folder:", out_path)

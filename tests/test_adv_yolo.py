@@ -112,7 +112,9 @@ def test_compute_proxy_from_preds_with_tensor_graph():
     img = torch.rand(1, 3, 8, 8, requires_grad=True)
     # internal model: produce 1 head with channels >5, e.g., C=6
     # make it a simple linear op on img that keeps grad path
-    head = torch.cat([img, img.mean(dim=(2, 3), keepdim=True).expand(1, 3, 8, 8)], dim=1)  # now C=6
+    head = torch.cat(
+        [img, img.mean(dim=(2, 3), keepdim=True).expand(1, 3, 8, 8)], dim=1
+    )  # now C=6
     # ensure head requires grad
     head = head * 1.0
     # compute loss using compute_proxy_from_preds: it expects (B,C,H,W)
@@ -122,5 +124,3 @@ def test_compute_proxy_from_preds_with_tensor_graph():
     # Since head derived from img, img should have grad
     assert img.grad is not None
     assert img.grad.abs().sum() > 0
-
-
