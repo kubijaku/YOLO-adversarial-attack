@@ -85,11 +85,19 @@ uv run src/main.py \
 
 ---
 
-### 3. Run Jupyter notebooks
+### 3. Simplest way for running 
 
 ```bash
-uv run jupyter notebook
+uv run src/main.py 
 ```
+
+Launches a notebook server using the uv-managed environment.
+
+---
+
+### 4. Run Jupyter notebooks
+
+TODO
 
 Launches a notebook server using the uv-managed environment.
 
