@@ -31,7 +31,7 @@ The goal is to generate visually small perturbations that are hardly recognizabl
 
 ## Usage with uv
 
-This project uses **[uv](https://uv.run/)** for environment management, dependency resolution, and running scripts.
+This project uses **[uv](https://docs.astral.sh/uv/)** for environment management, dependency resolution, and running scripts.
 
 ### 1. Sync dependencies and create virtual environment
 
