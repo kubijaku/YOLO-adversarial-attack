@@ -161,8 +161,7 @@ def main():
     args = parse_args()
     print_configuration(args)
 
-    dir_names_list = []
-    dir_names_list.extend(
+    create_directories(
         [
             args.adv_img_dir,
             args.pert_with_eps_dir,
@@ -170,7 +169,6 @@ def main():
             args.confusion_matrix_dir,
         ]
     )
-    create_directories(dir_names_list)
 
     if args.train:
         model_dir = train_model()

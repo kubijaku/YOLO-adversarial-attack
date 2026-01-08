@@ -1,15 +1,19 @@
 import os
 from pathlib import Path
+from typing import Tuple
+
 import numpy as np
 import torch
 import torch.nn.functional as F
 from PIL import Image
 from ultralytics import YOLO
 
+from utils.utils import get_yolo_boxes
+
 SUFFIXES = {".jpg", ".jpeg", ".png", ".bmp", ".tif", ".tiff"}
 
 
-def find_images_recursive(root):
+def find_images_recursive(root) -> list:
     p = Path(root)
     if not p.exists():
         return []
@@ -19,21 +23,21 @@ def find_images_recursive(root):
     return sorted(files)
 
 
-def load_image_tensor(path, device):
+def load_image_tensor(path, device) -> Tuple[torch.Tensor, np.ndarray]:
     img = Image.open(path).convert("RGB")
     arr = np.array(img).astype(np.float32) / 255.0
-    t = torch.from_numpy(arr).permute(2, 0, 1).unsqueeze(0).to(device)  # (1,3,H,W)
-    return t, arr
+    tensor = torch.from_numpy(arr).permute(2, 0, 1).unsqueeze(0).to(device)  # (1,3,H,W)
+    return tensor, arr
 
 
-def save_tensor_image(tensor, path):
+def save_tensor_image(tensor, path) -> None:
     t = tensor.detach().cpu().squeeze(0).permute(1, 2, 0).clamp(0, 1).numpy()
     im = Image.fromarray((t * 255).astype("uint8"))
     im.save(path)
 
 
-def read_yolo_label_file(path):
-    boxes = []
+def read_yolo_label_file(path) -> list[tuple[int, float, float, float, float]]:
+    boxes: list[tuple[int, float, float, float, float]] = []
     if not os.path.exists(path):
         return boxes
     with open(path, "r") as f:
@@ -46,7 +50,7 @@ def read_yolo_label_file(path):
     return boxes
 
 
-def flatten_pred_tensor(p: torch.Tensor):
+def flatten_pred_tensor(p: torch.Tensor) -> torch.Tensor:
     """
     Convert a raw pred tensor (B, C, H, W) to shape (B, P, C) where:
      - B is number of batches,
@@ -60,35 +64,34 @@ def flatten_pred_tensor(p: torch.Tensor):
         raise TypeError("Expected torch.Tensor")
     # For dims >=4, try to bring channels to last dim
     # Our case: (B, C, H, W)
-    t = p
-    if t.dim() >= 4:
+    tensor = p
+    if tensor.dim() >= 4:
         # heuristics: if dim 1 is small (<32) and last dims >1, it might be channel
         # We try to transpose so last dim is channels
         # Case: (B, C, H, W) -> (B, H, W, C)
-        if t.shape[1] <= 1024 and t.shape[-1] <= 1024:
-            # try common (B,C,H,W)
-            try:
-                t = t.permute(0, 2, 3, 1)  # (B,H,W,C)
-            except Exception:
-                pass
-        # Flatten spatial dims into P
-        B = t.shape[0]
-        rest = t.shape[1:]
-        P = 1
+        if tensor.shape[1] <= 1024 and tensor.shape[-1] <= 1024:
+            tensor = tensor.permute(0, 2, 3, 1)  # (B,H,W,C)
+
+        # Flatten spatial dims into prediction
+        num_batches = tensor.shape[0]
+        rest = tensor.shape[1:]
+        prediction = 1
         for d in rest[:-1]:
-            P *= d
-        C = rest[-1]
-        t = t.reshape(B, P, C)
-        return t
+            prediction *= d
+        channel_size = rest[-1]
+        tensor = tensor.reshape(num_batches, prediction, channel_size)
+        return tensor
 
     # fallback: flatten everything except batch
-    B = p.shape[0]
-    flat = p.reshape(B, -1, p.shape[-1])
+    num_batches = p.shape[0]
+    flat = p.reshape(num_batches, -1, p.shape[-1])
 
     return flat
 
 
-def compute_proxy_from_preds(raw, device: str | torch._C.device, gt_boxes=None):
+def compute_proxy_from_preds(
+    raw, device: str | torch._C.device, gt_boxes=None
+) -> torch.Tensor:
     """
     raw: either torch.Tensor or list/tuple of tensors (various shapes).
     in our case it is a list of 3 tensors (each one for different spatial resolutions:
@@ -204,7 +207,7 @@ def fgsm_attack(
         print(f"\n[{i}/{len(imgs)}] {img_path}")
         base = Path(img_path).stem
         label_path = os.path.join(labels_dir, base + ".txt")
-        gt_boxes = read_yolo_label_file(label_path)
+        gt_boxes = get_yolo_boxes(label_path)
         if gt_boxes:
             print(f" - Found {len(gt_boxes)} GT boxes")
         else:

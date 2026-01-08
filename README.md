@@ -107,7 +107,36 @@ Launches a notebook server using the uv-managed environment.
 
 The project uses **type checking** and **linting** to maintain code quality.
 
-### 1. Reformatting with ruff
+For running the test install additional dependencies 
+
+```bash
+uv sync --extra dev
+```
+
+### Run tests
+```bash
+uv run pytest
+```
+
+### Run with coverage
+```bash
+uv run pytest --cov=attack
+
+```
+
+### Run lint + format + typing
+```bash
+uv run ruff format
+uv run ruff check src tests
+uv run mypy src tests
+```
+
+### Run only utils tests:
+```bash
+uv run pytest tests/test_utils.py
+```
+
+### Reformatting with ruff
 
 ```bash
 uv run ruff format
@@ -117,7 +146,7 @@ Automatically reformats all Python files in the project.
 
 ---
 
-### 2. Type Checking with mypy
+### Type Checking with mypy
 
 ```bash
 uv run mypy src tests
@@ -127,7 +156,7 @@ Checks all Python files under `src/` and `tests/` for type consistency.
 
 ---
 
-### 3. Linting with ruff
+### Linting with ruff
 
 ```bash
 uv run ruff check src tests
@@ -137,7 +166,7 @@ Detects style issues, unused imports, and other common Python errors.
 
 ---
 
-### 4. Run all quality checks at once
+### Run all quality checks at once
 
 ```bash
 uv run ruff format && uv run mypy src tests && uv run ruff check src tests

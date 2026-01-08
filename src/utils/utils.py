@@ -1,6 +1,7 @@
 # script generate confusion matrix's to enable easy comparison of the results for the model
 # for validation data with new created adversarial images
 import os
+import warnings
 from typing import Any
 
 import numpy as np
@@ -11,8 +12,8 @@ from ultralytics import YOLO
 
 
 # ---------------- util functions ----------------
-def get_yolo_boxes(path):
-    boxes = []
+def get_yolo_boxes(path) -> list[tuple[int, float, float, float, float]]:
+    boxes: list[tuple[int, float, float, float, float]] = []
     if not os.path.exists(path):
         return boxes
     with open(path, "r") as f:
@@ -25,7 +26,7 @@ def get_yolo_boxes(path):
     return boxes
 
 
-def yolo_norm_to_xyxy(xc, yc, w, h, img_w, img_h):
+def yolo_norm_to_xyxy(xc, yc, w, h, img_w, img_h) -> list[float | Any]:
     x_c = xc * img_w
     y_c = yc * img_h
     bw = w * img_w
@@ -37,7 +38,7 @@ def yolo_norm_to_xyxy(xc, yc, w, h, img_w, img_h):
     return [x1, y1, x2, y2]
 
 
-def iou_xyxy(boxA, boxB):
+def iou_xyxy(boxA, boxB) -> float:
     xA = max(boxA[0], boxB[0])
     yA = max(boxA[1], boxB[1])
     xB = min(boxA[2], boxB[2])
@@ -53,7 +54,7 @@ def iou_xyxy(boxA, boxB):
     return interArea / union
 
 
-def load_images(folder):
+def load_images(folder) -> list:
     p = Path(folder)
     imgs = sorted(
         [
@@ -83,7 +84,7 @@ def get_label_file(labels_dir: str, img_path: str) -> str:
     return label_file
 
 
-def compute_iou_matrix(gt_objects: list, predictions: list) -> np.ndarray:
+def compute_iou_matrix(gt_objects: list[Any], predictions: list) -> np.ndarray:
     """
     Computes IoU matrix of gt_objects and predictions - IoU matrix is a 2D matrix (table) that stores Intersection-over-Union values between every ground-truth box and every predicted box.
     :param gt_objects: list of ground truth boxes
@@ -100,12 +101,12 @@ def compute_iou_matrix(gt_objects: list, predictions: list) -> np.ndarray:
 
 
 def get_matched_ground_truth_and_predictions(
-    gt_objects: list,
+    gt_objects: list[Any],
     predictions: list,
     iou_matrix: np.ndarray,
     iou_threshold: float,
     confusion_matrix: np.ndarray,
-):
+) -> tuple[set[Any], set[Any]]:
     matched_ground_truth = set()
     matched_pred = set()
 
@@ -128,9 +129,7 @@ def get_matched_ground_truth_and_predictions(
 
 
 # ---------------- core: evaluate one folder -> return local confusion_matrix ----------------
-def get_gt_objects(
-    label_file: str, img_path: str, img_w: int, img_h: int
-) -> type[list]:
+def get_gt_objects(label_file: str, img_path: str, img_w: int, img_h: int) -> list[Any]:
     gt_objects = []
     if label_file:
         gt_yolo_boxes = get_yolo_boxes(label_file)
@@ -167,8 +166,11 @@ def get_predictions(results: list, conf_threshold: float, img_path: str) -> list
             }
         )
     if len(predictions) == 0:
-        raise LookupError("No predictions found for", img_path)
-
+        warnings.warn(
+            f"No predictions found for {img_path}",
+            category=UserWarning,
+            stacklevel=2,
+        )
     return predictions
 
 
@@ -180,7 +182,7 @@ def evaluate_confusion_matrix(
     device: str,
     conf_threshold: float,
     iou_threshold: float,
-):
+) -> np.ndarray:
     """
     Evaluate detections on images in images_dir using gt_objects labels in labels_dir.
     Returns a NEW confusion matrix of shape (num_classes+1, num_classes+1).
@@ -248,7 +250,7 @@ def normalize_confusion_matrix(confusion_matrix):
 
 def plot_and_save_confusion_matrix(
     confusion_matrix, names, out_path="confusion_matrix.png", title="Confusion Matrix"
-):
+) -> None:
     labels = names + ["No Detection"]
     fig, ax = plt.subplots(figsize=(12, 10))
     ax.imshow(confusion_matrix, interpolation="nearest", cmap="Blues")
@@ -280,7 +282,7 @@ def plot_and_save_confusion_matrix(
 
 def save_confusion_matrix_as_csv(
     confusion_matrix: np.ndarray, csv_filename: str, output_dir: str
-):
+) -> None:
     file_path = os.path.join(output_dir, csv_filename)
     np.savetxt(
         file_path,
