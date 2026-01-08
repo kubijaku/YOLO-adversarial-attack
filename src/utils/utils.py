@@ -157,6 +157,11 @@ def get_predictions(results: list, conf_threshold: float, img_path: str) -> list
 
     for b, c, cf in zip(boxes_xyxy, detected_class_names, confs):
         if cf < conf_threshold:
+            warnings.warn(
+                f"prediction under confidence threshold {conf_threshold} for {img_path} - skipping.",
+                category=UserWarning,
+                stacklevel=2,
+            )
             continue
         predictions.append(
             {
