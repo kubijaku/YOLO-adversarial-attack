@@ -201,7 +201,7 @@ def main():
     plot_and_save_confusion_matrix(
         confusion_matrix_val,
         CLASS_NAMES,
-        out_path=os.path.join(
+        output_path=os.path.join(
             args.confusion_matrix_dir, "val_dataset_confusion_matrix.png"
         ),
         title="Validation (clean) - Confusion Matrix (Normalized)",
@@ -211,7 +211,7 @@ def main():
     plot_and_save_confusion_matrix(
         confusion_matrix_val_norm,
         CLASS_NAMES,
-        out_path=os.path.join(
+        output_path=os.path.join(
             args.confusion_matrix_dir, "val_dataset_confusion_matrix_normalized.png"
         ),
         title="Validation (clean) - Confusion Matrix (Normalized)",
@@ -220,7 +220,7 @@ def main():
     save_confusion_matrix_as_csv(
         confusion_matrix=confusion_matrix_val_norm,
         csv_filename="val_confusion_normalized.csv",
-        output_dir=args.confusion_matrix_dir,
+        output_directory=args.confusion_matrix_dir,
     )
 
     ### Evaluate on adversarial set ###
@@ -237,7 +237,7 @@ def main():
     plot_and_save_confusion_matrix(
         confusion_matrix_adv,
         CLASS_NAMES,
-        out_path=os.path.join(
+        output_path=os.path.join(
             args.confusion_matrix_dir, "adversarial_dataset_confusion_matrix.png"
         ),
         title="Validation (clean) - Confusion Matrix (Normalized)",
@@ -247,7 +247,7 @@ def main():
     plot_and_save_confusion_matrix(
         confusion_matrix_adv_norm,
         CLASS_NAMES,
-        out_path=os.path.join(
+        output_path=os.path.join(
             args.confusion_matrix_dir,
             "adversarial_dataset_confusion_matrix_normalized.png",
         ),
@@ -257,7 +257,7 @@ def main():
     save_confusion_matrix_as_csv(
         confusion_matrix=confusion_matrix_adv_norm,
         csv_filename="adversarial_confusion_normalized.csv",
-        output_dir=args.confusion_matrix_dir,
+        output_directory=args.confusion_matrix_dir,
     )
 
 

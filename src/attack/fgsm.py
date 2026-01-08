@@ -8,49 +8,73 @@ import torch.nn.functional as F
 from PIL import Image
 from ultralytics import YOLO
 
-from utils.utils import get_yolo_boxes
-
-SUFFIXES = {".jpg", ".jpeg", ".png", ".bmp", ".tif", ".tiff"}
+from utils.utils import get_yolo_boxes, find_images_recursive
 
 
-def find_images_recursive(root) -> list:
-    p = Path(root)
-    if not p.exists():
-        return []
-    files = [
-        str(f) for f in p.rglob("*") if f.is_file() and f.suffix.lower() in SUFFIXES
-    ]
-    return sorted(files)
+def load_image_tensor(image_path: str, device: str) -> Tuple[torch.Tensor, np.ndarray]:
+    """
+    Loads an image from disk and converts it to both a PyTorch tensor and a NumPy array.
+
+    Args:
+        image_path (str): Path to the image file.
+        device (str): PyTorch device to move the tensor to (e.g., 'cpu', 'cuda', 'mps').
+
+    Returns:
+        Tuple[torch.Tensor, np.ndarray]:
+            - tensor: Image tensor of shape (1, 3, H, W) with values in [0, 1].
+            - array: NumPy array of shape (H, W, 3) with values in [0, 1].
+    """
+    pil_image = Image.open(image_path).convert("RGB")
+    image_array = np.array(pil_image).astype(np.float32) / 255.0
+    image_tensor = torch.from_numpy(image_array).permute(2, 0, 1).unsqueeze(0).to(device)  # (1, 3, H, W)
+    return image_tensor, image_array
 
 
-def load_image_tensor(path, device) -> Tuple[torch.Tensor, np.ndarray]:
-    img = Image.open(path).convert("RGB")
-    arr = np.array(img).astype(np.float32) / 255.0
-    tensor = torch.from_numpy(arr).permute(2, 0, 1).unsqueeze(0).to(device)  # (1,3,H,W)
-    return tensor, arr
+def save_tensor_image(tensor: torch.Tensor, output_path: str) -> None:
+    """
+    Saves a PyTorch tensor as an image file.
+
+    Args:
+        tensor (torch.Tensor): Image tensor of shape (1, 3, H, W) or similar.
+        output_path (str): Path to save the resulting image.
+
+    Notes:
+        - Tensor values are expected in the range [0, 1].
+        - Converts tensor to CPU, clamps values, converts to uint8, and saves as image.
+    """
+    image_array = tensor.detach().cpu().squeeze(0).permute(1, 2, 0).clamp(0, 1).numpy()
+    image = Image.fromarray((image_array * 255).astype("uint8"))
+    image.save(output_path)
 
 
-def save_tensor_image(tensor, path) -> None:
-    t = tensor.detach().cpu().squeeze(0).permute(1, 2, 0).clamp(0, 1).numpy()
-    im = Image.fromarray((t * 255).astype("uint8"))
-    im.save(path)
+def read_yolo_label_file(label_file_path) -> list[tuple[int, float, float, float, float]]:
+    """
+    Reads a YOLO-format label file and returns a list of bounding boxes.
 
+    Each line in the file is expected to contain:
+        <class_id> <x_center_norm> <y_center_norm> <width_norm> <height_norm>
 
-def read_yolo_label_file(path) -> list[tuple[int, float, float, float, float]]:
-    boxes: list[tuple[int, float, float, float, float]] = []
-    if not os.path.exists(path):
-        return boxes
-    with open(path, "r") as f:
-        for line in f:
+    Returns:
+        List of tuples: (class_id, x_center, y_center, width, height)
+    """
+    yolo_boxes: list[tuple[int, float, float, float, float]] = []
+
+    if not os.path.exists(label_file_path):
+        return yolo_boxes
+
+    with open(label_file_path, "r") as label_file:
+        for line in label_file:
             parts = line.strip().split()
             if len(parts) >= 5:
-                cls = int(float(parts[0]))
-                xc, yc, w, h = map(float, parts[1:5])
-                boxes.append((cls, xc, yc, w, h))
-    return boxes
+                class_id = int(float(parts[0]))
+                x_center, y_center, width, height = map(float, parts[1:5])
+                yolo_boxes.append((class_id, x_center, y_center, width, height))
+
+    return yolo_boxes
 
 
-def flatten_pred_tensor(p: torch.Tensor) -> torch.Tensor:
+
+def flatten_pred_tensor(prediction_tensor: torch.Tensor) -> torch.Tensor:
     """
     Convert a raw pred tensor (B, C, H, W) to shape (B, P, C) where:
      - B is number of batches,
@@ -60,109 +84,131 @@ def flatten_pred_tensor(p: torch.Tensor) -> torch.Tensor:
     Accepts tensors shaped like:
       - (B, C, H, W)
     """
-    if not isinstance(p, torch.Tensor):
+    if not isinstance(prediction_tensor, torch.Tensor):
         raise TypeError("Expected torch.Tensor")
-    # For dims >=4, try to bring channels to last dim
-    # Our case: (B, C, H, W)
-    tensor = p
-    if tensor.dim() >= 4:
-        # heuristics: if dim 1 is small (<32) and last dims >1, it might be channel
-        # We try to transpose so last dim is channels
+
+    if prediction_tensor.dim() >= 4:
+        # heuristics: if dim 1 is small (<1024) and last dims >1, it might be channel
         # Case: (B, C, H, W) -> (B, H, W, C)
-        if tensor.shape[1] <= 1024 and tensor.shape[-1] <= 1024:
-            tensor = tensor.permute(0, 2, 3, 1)  # (B,H,W,C)
+        if prediction_tensor.shape[1] <= 1024 and prediction_tensor.shape[-1] <= 1024:
+            prediction_tensor = prediction_tensor.permute(0, 2, 3, 1)  # (B, H, W, C)
 
-        # Flatten spatial dims into prediction
-        num_batches = tensor.shape[0]
-        rest = tensor.shape[1:]
-        prediction = 1
-        for d in rest[:-1]:
-            prediction *= d
-        channel_size = rest[-1]
-        tensor = tensor.reshape(num_batches, prediction, channel_size)
-        return tensor
+        # Flatten spatial dimensions into prediction dimension
+        batch_size = prediction_tensor.shape[0]
+        remaining_dimensions = prediction_tensor.shape[1:]
 
-    # fallback: flatten everything except batch
-    num_batches = p.shape[0]
-    flat = p.reshape(num_batches, -1, p.shape[-1])
+        num_predictions = 1
+        for spatial_dim in remaining_dimensions[:-1]:
+            num_predictions *= spatial_dim
 
-    return flat
+        channel_size = remaining_dimensions[-1]
+
+        reshaped_tensor = prediction_tensor.reshape(
+            batch_size, num_predictions, channel_size
+        )
+        return reshaped_tensor
+
+    # fallback: flatten everything except batch dimension
+    batch_size = prediction_tensor.shape[0]
+    flattened_tensor = prediction_tensor.reshape(
+        batch_size, -1, prediction_tensor.shape[-1]
+    )
+
+    return flattened_tensor
 
 
 def compute_proxy_from_preds(
-    raw, device: str | torch._C.device, gt_boxes=None
+    raw_predictions,
+    device: str | torch._C.device,
+    gt_boxes=None,
 ) -> torch.Tensor:
     """
-    raw: either torch.Tensor or list/tuple of tensors (various shapes).
-    in our case it is a list of 3 tensors (each one for different spatial resolutions:
+    raw_predictions: either torch.Tensor or list/tuple of tensors (various shapes).
+    In our case it is a list of 3 tensors (each one for different spatial resolutions:
         - small objects (high-resolution feature map),
         - medium objects,
         - large objects (low-resolution feature map).
     Compute a proxy loss robustly without concatenating incompatible tensors.
     """
     # normalize to list of tensors
-    if isinstance(raw, torch.Tensor):
-        pred_list = [raw]
-    elif isinstance(raw, (list, tuple)):
-        pred_list = [p for p in raw if isinstance(p, torch.Tensor)]
+    if isinstance(raw_predictions, torch.Tensor):
+        prediction_tensors = [raw_predictions]
+    elif isinstance(raw_predictions, (list, tuple)):
+        prediction_tensors = [
+            prediction_tensor
+            for prediction_tensor in raw_predictions
+            if isinstance(prediction_tensor, torch.Tensor)
+        ]
     else:
         raise RuntimeError("Unsupported preds type")
 
-    torch_device = pred_list[0].device if pred_list else torch.device(device)
+    torch_device = (
+        prediction_tensors[0].device
+        if prediction_tensors
+        else torch.device(device)
+    )
     total_loss = torch.tensor(0.0, device=torch_device)
 
     per_head_scores = []
-    for p in pred_list:
+    for prediction_tensor in prediction_tensors:
         try:
-            flat = flatten_pred_tensor(p)  # (B,P,C)
+            flattened_predictions = flatten_pred_tensor(
+                prediction_tensor
+            )  # (B, P, C)
         except Exception:
             # fallback: convert to float and sum
-            total_loss = total_loss + p.float().abs().sum()
+            total_loss = total_loss + prediction_tensor.float().abs().sum()
             continue
 
-        B, P, C = flat.shape
-        if C < 5:
-            print("never comes in here")
-            # treat as generic activation summary
-            per_head_scores.append(flat.abs().sum(dim=(1, 2)))  # (B,)
-            continue
+        batch_size, num_predictions, channel_size = flattened_predictions.shape
 
-        obj = flat[..., 4]  # (B,P)
+        objectness_logits = flattened_predictions[..., 4]  # (B, P)
 
         # If we have class scores → use channels 5+ (standard YOLO)
         # If not → fallback and treat object as a "fake" class logit (for safety)
-        class_logits = flat[..., 5:] if C > 5 else flat[..., 4:].unsqueeze(-1)
+        class_logits = (
+            flattened_predictions[..., 5:]
+            if channel_size > 5
+            else flattened_predictions[..., 4:].unsqueeze(-1)
+        )
+
         if class_logits.shape[-1] == 1:
-            class_probs = torch.sigmoid(class_logits)
+            class_probabilities = torch.sigmoid(class_logits)
         else:
             # softmax across class dim
-            class_probs = F.softmax(class_logits, dim=-1)
+            class_probabilities = F.softmax(class_logits, dim=-1)
 
-        max_class_prob, _ = class_probs.max(dim=-1)  # (B,P)
-        score = torch.sigmoid(obj) * max_class_prob  # (B,P)
-        per_head_scores.append(score)  # keep per-pred scores
+        max_class_probability, _ = class_probabilities.max(dim=-1)  # (B, P)
+        detection_scores = (
+            torch.sigmoid(objectness_logits) * max_class_probability
+        )  # (B, P)
+
+        per_head_scores.append(detection_scores)
+
     # Now aggregate per-head scores into a single loss
     # If ground truth boxes available, penalize the model's highest score for those classes.
     if gt_boxes:
         # For each GT class, find its best score across all heads & preds
-        for cls, xc, yc, w, h in gt_boxes:
-            best_vals = []
-            for head_score in per_head_scores:
-                # head_score is (B,P); class-specific proxy: need class_probs for that head if available
-                # But we simplified: if head provided only score, we use that score as proxy.
-                # For heads where we computed class_probs we would have used class-specific; here we approximate.
-                # We'll use the head_score's max as a conservative proxy.
-                best_vals.append(head_score.max(dim=1).values)  # (B,)
-            if not best_vals:
+        for class_id, center_x, center_y, width, height in gt_boxes:
+            best_scores_per_head = []
+            for head_scores in per_head_scores:
+                best_scores_per_head.append(
+                    head_scores.max(dim=1).values
+                )  # (B,)
+
+            if not best_scores_per_head:
                 continue
-            # stack and take the maximum across heads, then -log to make loss we maximize
-            stacked = torch.stack(best_vals, dim=0)  # (num_heads, B)
-            max_across = stacked.max(dim=0).values  # (B,)
-            total_loss = total_loss + (-torch.log(max_across + 1e-6)).sum()
+
+            stacked_scores = torch.stack(best_scores_per_head, dim=0)  # (num_heads, B)
+            max_scores_across_heads = stacked_scores.max(dim=0).values  # (B,)
+
+            total_loss = total_loss + (
+                -torch.log(max_scores_across_heads + 1e-6)
+            ).sum()
     else:
         # no GT: just sum all per-head scores (we will maximize this)
-        for head_score in per_head_scores:
-            total_loss = total_loss + head_score.sum()
+        for head_scores in per_head_scores:
+            total_loss = total_loss + head_scores.sum()
 
     return total_loss
 
@@ -178,82 +224,127 @@ def fgsm_attack(
     max_img: int,
     device: str,
 ):
+    """
+    Perform an untargeted FGSM (Fast Gradient Sign Method) adversarial attack
+    against a YOLO model on a directory of images.
+
+    For each image:
+    - Loads the image and corresponding YOLO labels (if available)
+    - Computes a proxy loss from raw model predictions
+    - Generates adversarial perturbations using FGSM
+    - Saves:
+        * raw perturbations
+        * perturbations scaled by epsilon
+        * final adversarial images
+
+    Args:
+        model_path (str): Path to the YOLO model (.pt file).
+        img_dir (str): Directory containing input images.
+        labels_dir (str): Directory containing YOLO-format label files.
+        adv_img_dir (str): Directory to save adversarial images.
+        pert_with_eps_dir (str): Directory to save epsilon-scaled perturbations.
+        pert_dir (str): Directory to save raw perturbation images.
+        eps (float): FGSM epsilon (perturbation strength).
+        max_img (int): Maximum number of images to process (0 = all).
+        device (str): Device identifier ("cpu", "cuda", or "mps").
+    """
     print("Device:", device)
     print("Loading model:", model_path)
-    model = YOLO(model_path)
-    model.to(device)
-    internal = getattr(model, "model", None)
-    if internal is None:
+
+    yolo_model = YOLO(model_path)
+    yolo_model.to(device)
+
+    internal_model_attr = getattr(yolo_model, "model", None)
+    if internal_model_attr is None:
         print(
             "Warning: model.model not found; attempting wrapper forward which may be non-differentiable."
         )
     else:
-        print("Using internal model:", type(internal))
+        print("Using internal model:", type(internal_model_attr))
 
-    imgs = find_images_recursive(img_dir)
-    print(f"Found {len(imgs)} images under {img_dir}")
-    if len(imgs) > 0:
+    image_paths = find_images_recursive(img_dir)
+    print(f"Found {len(image_paths)} images under {img_dir}")
+
+    if len(image_paths) > 0:
         print("First few images:")
-        for p in imgs[:10]:
-            print("  ", p)
-    if not imgs:
+        for image_path in image_paths[:10]:
+            print("  ", image_path)
+
+    if not image_paths:
         print("No images found. Exiting.")
         return
 
     if max_img:
-        imgs = imgs[:max_img]
+        image_paths = image_paths[:max_img]
 
-    for i, img_path in enumerate(imgs, 1):
-        print(f"\n[{i}/{len(imgs)}] {img_path}")
-        base = Path(img_path).stem
-        label_path = os.path.join(labels_dir, base + ".txt")
-        gt_boxes = get_yolo_boxes(label_path)
-        if gt_boxes:
-            print(f" - Found {len(gt_boxes)} GT boxes")
+    for image_index, image_path in enumerate(image_paths, 1):
+        print(f"\n[{image_index}/{len(image_paths)}] {image_path}")
+
+        image_stem = Path(image_path).stem
+        label_file_path = os.path.join(labels_dir, image_stem + ".txt")
+
+        ground_truth_boxes = get_yolo_boxes(label_file_path)
+        if ground_truth_boxes:
+            print(f" - Found {len(ground_truth_boxes)} GT boxes")
         else:
             print(" - No GT boxes (will use fallback loss)")
 
-        img_t, orig = load_image_tensor(img_path, device=device)
-        img_t = img_t.clone().detach()
-        img_t.requires_grad = True
+        image_tensor, original_image_array = load_image_tensor(
+            image_path, device=device
+        )
+        image_tensor = image_tensor.clone().detach()
+        image_tensor.requires_grad = True
 
-        # Get raw preds via internal model (differentiable)
-        internal_model = getattr(model, "model", model)
+        # Get raw predictions via internal model (differentiable)
+        internal_model = getattr(yolo_model, "model", yolo_model)
         internal_model.train()
-        raw = internal_model(img_t)  # raw can be tensor or list/tuple of tensors
 
-        # Build proxy loss and do FGSM
+        raw_predictions = internal_model(image_tensor)
+
+        # Build proxy loss and apply FGSM
         try:
-            loss = compute_proxy_from_preds(raw=raw, gt_boxes=gt_boxes, device=device)
+            loss = compute_proxy_from_preds(
+                raw_predictions=raw_predictions,
+                gt_boxes=ground_truth_boxes,
+                device=device,
+            )
+
             # maximize loss -> gradient step in direction of sign(grad)
             loss.backward()
-            grad = img_t.grad.data
-            if grad is None:
+
+            gradient_tensor = image_tensor.grad.data
+            if gradient_tensor is None:
                 print(" - No gradient computed (None). Skipping.")
                 continue
-            perturbations = torch.sign(grad)
 
-            out_path = os.path.join(pert_dir, f"{base}_eps{int(eps * 255)}.png")
-            save_tensor_image(perturbations, out_path)
+            perturbation_tensor = torch.sign(gradient_tensor)
 
-            out_path = os.path.join(
-                pert_with_eps_dir, f"{base}_eps{int(eps * 255)}.png"
+            perturbation_path = os.path.join(
+                pert_dir, f"{image_stem}_eps{int(eps * 255)}.png"
             )
-            save_tensor_image(eps * perturbations, out_path)
+            save_tensor_image(perturbation_tensor, perturbation_path)
 
-            # adding perturbations
-            adv = img_t + eps * perturbations
-            # normalizing the image
-            adv = torch.clamp(adv, 0.0, 1.0).detach()
+            scaled_perturbation_path = os.path.join(
+                pert_with_eps_dir, f"{image_stem}_eps{int(eps * 255)}.png"
+            )
+            save_tensor_image(eps * perturbation_tensor, scaled_perturbation_path)
 
-            out_path = os.path.join(adv_img_dir, f"{base}_eps{int(eps * 255)}.png")
-            save_tensor_image(adv, out_path)
+            # apply perturbation
+            adversarial_tensor = image_tensor + eps * perturbation_tensor
+            adversarial_tensor = torch.clamp(adversarial_tensor, 0.0, 1.0).detach()
+
+            adversarial_output_path = os.path.join(
+                adv_img_dir, f"{image_stem}_eps{int(eps * 255)}.png"
+            )
+            save_tensor_image(adversarial_tensor, adversarial_output_path)
 
             print(
-                f" - Saved adversarial to {out_path} (loss {float(loss):.4f}, grad_max {float(grad.abs().max()):.6f})"
+                f" - Saved adversarial to {adversarial_output_path} "
+                f"(loss {float(loss):.4f}, grad_max {float(gradient_tensor.abs().max()):.6f})"
             )
-        except Exception as e:
-            print(" - Attack failed for this image:", e)
+
+        except Exception as exception:
+            print(" - Attack failed for this image:", exception)
             continue
 
-    print("\nDone. Check folder:", out_path)
+    print("\nDone. Check folder:", adversarial_output_path)

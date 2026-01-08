@@ -10,60 +10,150 @@ from PIL import Image
 import matplotlib.pyplot as plt
 from ultralytics import YOLO
 
+SUFFIXES = {".jpg", ".jpeg", ".png", ".bmp", ".tif", ".tiff"}
 
 # ---------------- util functions ----------------
-def get_yolo_boxes(path) -> list[tuple[int, float, float, float, float]]:
+def get_yolo_boxes(label_file_path: str) -> list[tuple[int, float, float, float, float]]:
+    """
+    Parse a YOLO-format label file and return bounding boxes.
+
+    Each line in the label file should have the format:
+        <class> <x_center> <y_center> <width> <height>
+
+    Args:
+        label_file_path (str): Path to the YOLO label file.
+
+    Returns:
+        list[tuple[int, float, float, float, float]]:
+            List of tuples representing each bounding box as
+            (class_id, x_center, y_center, width, height).
+            Returns an empty list if the file does not exist or is empty.
+    """
     boxes: list[tuple[int, float, float, float, float]] = []
-    if not os.path.exists(path):
+    if not os.path.exists(label_file_path):
         return boxes
-    with open(path, "r") as f:
-        for line in f:
-            parts = line.strip().split()
-            if len(parts) >= 5:
-                cls = int(float(parts[0]))
-                xc, yc, w, h = map(float, parts[1:5])
-                boxes.append((cls, xc, yc, w, h))
+
+    with open(label_file_path, "r") as label_file:
+        for line in label_file:
+            line_parts = line.strip().split()
+            if len(line_parts) >= 5:
+                class_id = int(float(line_parts[0]))
+                x_center, y_center, width, height = map(float, line_parts[1:5])
+                boxes.append((class_id, x_center, y_center, width, height))
+
     return boxes
 
 
-def yolo_norm_to_xyxy(xc, yc, w, h, img_w, img_h) -> list[float | Any]:
-    x_c = xc * img_w
-    y_c = yc * img_h
-    bw = w * img_w
-    bh = h * img_h
-    x1 = x_c - bw / 2
-    y1 = y_c - bh / 2
-    x2 = x_c + bw / 2
-    y2 = y_c + bh / 2
+def yolo_norm_to_xyxy(
+    x_center_norm: float,
+    y_center_norm: float,
+    width_norm: float,
+    height_norm: float,
+    image_width: int,
+    image_height: int
+) -> list[float]:
+    """
+    Convert YOLO normalized bounding box coordinates to absolute (x1, y1, x2, y2) format.
+
+    YOLO format:
+        - x_center_norm, y_center_norm: normalized center coordinates (0-1)
+        - width_norm, height_norm: normalized width and height (0-1)
+
+    Args:
+        x_center_norm (float): Normalized x center of the bounding box.
+        y_center_norm (float): Normalized y center of the bounding box.
+        width_norm (float): Normalized width of the bounding box.
+        height_norm (float): Normalized height of the bounding box.
+        image_width (int): Width of the image in pixels.
+        image_height (int): Height of the image in pixels.
+
+    Returns:
+        list[float]: [x1, y1, x2, y2] coordinates in pixel space.
+    """
+    x_center_abs = x_center_norm * image_width
+    y_center_abs = y_center_norm * image_height
+    box_width_abs = width_norm * image_width
+    box_height_abs = height_norm * image_height
+    x1 = x_center_abs - box_width_abs / 2
+    y1 = y_center_abs - box_height_abs / 2
+    x2 = x_center_abs + box_width_abs / 2
+    y2 = y_center_abs + box_height_abs / 2
     return [x1, y1, x2, y2]
 
 
-def iou_xyxy(boxA, boxB) -> float:
-    xA = max(boxA[0], boxB[0])
-    yA = max(boxA[1], boxB[1])
-    xB = min(boxA[2], boxB[2])
-    yB = min(boxA[3], boxB[3])
-    interW = max(0.0, xB - xA)
-    interH = max(0.0, yB - yA)
-    interArea = interW * interH
-    areaA = max(0.0, boxA[2] - boxA[0]) * max(0.0, boxA[3] - boxA[1])
-    areaB = max(0.0, boxB[2] - boxB[0]) * max(0.0, boxB[3] - boxB[1])
-    union = areaA + areaB - interArea
-    if union <= 0:
+
+def iou_xyxy(box_a: list[float], box_b: list[float]) -> float:
+    """
+    Compute the Intersection over Union (IoU) of two bounding boxes in (x1, y1, x2, y2) format.
+
+    Args:
+        box_a (list[float]): Bounding box A in format [x1, y1, x2, y2].
+        box_b (list[float]): Bounding box B in format [x1, y1, x2, y2].
+
+    Returns:
+        float: Intersection over Union (IoU) value between 0.0 and 1.0.
+               Returns 0.0 if boxes do not overlap.
+    """
+    x_left = max(box_a[0], box_b[0])
+    y_top = max(box_a[1], box_b[1])
+    x_right = min(box_a[2], box_b[2])
+    y_bottom = min(box_a[3], box_b[3])
+
+    intersection_width = max(0.0, x_right - x_left)
+    intersection_height = max(0.0, y_bottom - y_top)
+    intersection_area = intersection_width * intersection_height
+
+    area_a = max(0.0, box_a[2] - box_a[0]) * max(0.0, box_a[3] - box_a[1])
+    area_b = max(0.0, box_b[2] - box_b[0]) * max(0.0, box_b[3] - box_b[1])
+    union_area = area_a + area_b - intersection_area
+
+    if union_area <= 0:
         return 0.0
-    return interArea / union
+    return intersection_area / union_area
 
 
-def load_images(folder) -> list:
-    p = Path(folder)
-    imgs = sorted(
+def find_images_recursive(root_dir: str) -> list[str]:
+    """
+    Recursively find all image files under the given directory that match known image suffixes.
+
+    Args:
+        root_dir (str): Root directory to search for image files.
+
+    Returns:
+        list[str]: Sorted list of image file paths found under the directory.
+    """
+    root_path = Path(root_dir)
+    if not root_path.exists():
+        return []
+
+    image_files = [
+        str(file_path)
+        for file_path in root_path.rglob("*")
+        if file_path.is_file() and file_path.suffix.lower() in SUFFIXES
+    ]
+
+    return sorted(image_files)
+
+def load_images(folder_path: str) -> list[str]:
+    """
+    Load all image file paths from a folder, filtering by common image file extensions.
+
+    Args:
+        folder_path (str): Path to the folder containing images.
+
+    Returns:
+        list[str]: Sorted list of image file paths with extensions
+                   in SUFFIXES.
+    """
+    folder = Path(folder_path)
+    image_files = sorted(
         [
-            str(f)
-            for f in p.iterdir()
-            if f.suffix.lower() in [".jpg", ".jpeg", ".png", ".bmp", ".tif", ".tiff"]
+            str(file_path)
+            for file_path in folder.iterdir()
+            if file_path.suffix.lower() in SUFFIXES
         ]
     )
-    return imgs
+    return image_files
 
 
 def get_label_file(labels_dir: str, img_path: str) -> str:
@@ -101,81 +191,136 @@ def compute_iou_matrix(gt_objects: list[Any], predictions: list) -> np.ndarray:
 
 
 def get_matched_ground_truth_and_predictions(
-    gt_objects: list[Any],
-    predictions: list,
+    ground_truth_objects: list[Any],
+    predicted_objects: list[Any],
     iou_matrix: np.ndarray,
     iou_threshold: float,
     confusion_matrix: np.ndarray,
 ) -> tuple[set[Any], set[Any]]:
-    matched_ground_truth = set()
-    matched_pred = set()
+    """
+    Match ground truth objects with predicted objects based on IoU and update the confusion matrix.
+
+    Args:
+        ground_truth_objects (list[Any]): List of ground truth objects, each containing at least a 'cls' and 'xyxy'.
+        predicted_objects (list[Any]): List of predicted objects, each containing at least a 'cls' and 'xyxy'.
+        iou_matrix (np.ndarray): Precomputed IoU values between all ground truth and predicted boxes.
+        iou_threshold (float): Minimum IoU to consider a match.
+        confusion_matrix (np.ndarray): Confusion matrix to be updated with matches.
+
+    Returns:
+        tuple[set[Any], set[Any]]:
+            - Set of indices of matched ground truth objects.
+            - Set of indices of matched predicted objects.
+    """
+    matched_ground_truth_indices = set()
+    matched_prediction_indices = set()
 
     while True:
         if iou_matrix.size == 0:
             break
-        gt_idx, pred_idx = np.unravel_index(np.argmax(iou_matrix), iou_matrix.shape)
-        max_iou = iou_matrix[gt_idx, pred_idx]
+        best_gt_idx, best_pred_idx = np.unravel_index(np.argmax(iou_matrix), iou_matrix.shape)
+        max_iou = iou_matrix[best_gt_idx, best_pred_idx]
         if max_iou < iou_threshold:
             break
-        ground_truth_cls = gt_objects[gt_idx]["cls"]
-        pred_cls = predictions[pred_idx]["cls"]
-        confusion_matrix[ground_truth_cls, pred_cls] += 1
-        matched_ground_truth.add(gt_idx)
-        matched_pred.add(pred_idx)
-        iou_matrix[gt_idx, :] = -1.0
-        iou_matrix[:, pred_idx] = -1.0
+        ground_truth_class = ground_truth_objects[best_gt_idx]["cls"]
+        predicted_class = predicted_objects[best_pred_idx]["cls"]
+        confusion_matrix[ground_truth_class, predicted_class] += 1
+        matched_ground_truth_indices.add(best_gt_idx)
+        matched_prediction_indices.add(best_pred_idx)
+        iou_matrix[best_gt_idx, :] = -1.0
+        iou_matrix[:, best_pred_idx] = -1.0
 
-    return matched_ground_truth, matched_pred
+    return matched_ground_truth_indices, matched_prediction_indices
 
 
 # ---------------- core: evaluate one folder -> return local confusion_matrix ----------------
-def get_gt_objects(label_file: str, img_path: str, img_w: int, img_h: int) -> list[Any]:
-    gt_objects = []
+def get_gt_objects(label_file: str, image_path: str, image_width: int, image_height: int) -> list[Any]:
+    """
+    Load ground truth objects from a YOLO label file and convert normalized coordinates to absolute image coordinates.
+
+    Args:
+        label_file (str): Path to the YOLO label file.
+        image_path (str): Path to the image file (used for warnings).
+        image_width (int): Width of the image in pixels.
+        image_height (int): Height of the image in pixels.
+
+    Returns:
+        list[Any]: List of ground truth objects, each represented as a dictionary with keys:
+            - "cls": integer class ID
+            - "xyxy": list of absolute bounding box coordinates [x1, y1, x2, y2]
+
+    Raises:
+        LookupError: If no label file is provided.
+    """
+    ground_truth_objects = []
+
     if label_file:
-        gt_yolo_boxes = get_yolo_boxes(label_file)
-        for cls, xc, yc, w, h in gt_yolo_boxes:
-            gt_objects.append(
+        yolo_boxes = get_yolo_boxes(label_file)
+        for class_id, x_center, y_center, width, height in yolo_boxes:
+            ground_truth_objects.append(
                 {
-                    "cls": int(cls),
-                    "xyxy": yolo_norm_to_xyxy(xc, yc, w, h, img_w, img_h),
+                    "cls": int(class_id),
+                    "xyxy": yolo_norm_to_xyxy(x_center, y_center, width, height, image_width, image_height),
                 }
             )
     else:
-        print("Warning: no gt_objects label found for", img_path, "- skipping")
-        raise LookupError("No gt_objects label found for")
-    return gt_objects
+        print("Warning: no ground truth objects label found for", image_path, "- skipping")
+        raise LookupError("No ground truth objects label found for the given image")
+
+    return ground_truth_objects
 
 
-def get_predictions(results: list, conf_threshold: float, img_path: str) -> list[Any]:
-    r = results[0]
+
+def get_predictions(model_results: list, confidence_threshold: float, image_path: str) -> list[Any]:
+    """
+    Extract predictions from YOLO model results, filtering out low-confidence detections.
+
+    Args:
+        model_results (list): List of YOLO prediction results (usually the output of model.predict()).
+        confidence_threshold (float): Minimum confidence required to include a prediction.
+        image_path (str): Path to the image (used for warnings).
+
+    Returns:
+        list[Any]: List of predicted objects, each represented as a dictionary with keys:
+            - "cls": integer class ID
+            - "xyxy": list of bounding box coordinates [x1, y1, x2, y2]
+            - "conf": confidence score (float)
+
+    Warnings:
+        - Warns if a prediction is below the confidence threshold.
+        - Warns if no predictions are found for the image.
+    """
+    first_result = model_results[0]
 
     predictions = []
 
-    boxes_xyxy = r.boxes.xyxy.cpu().numpy()
-    confs = r.boxes.conf.cpu().numpy()
-    detected_class_names = r.boxes.cls.cpu().numpy().astype(int)
+    boxes_xyxy = first_result.boxes.xyxy.cpu().numpy()
+    confidences = first_result.boxes.conf.cpu().numpy()
+    detected_class_ids = first_result.boxes.cls.cpu().numpy().astype(int)
 
-    for b, c, cf in zip(boxes_xyxy, detected_class_names, confs):
-        if cf < conf_threshold:
+    for box_coords, class_id, confidence in zip(boxes_xyxy, detected_class_ids, confidences):
+        if confidence < confidence_threshold:
             warnings.warn(
-                f"prediction under confidence threshold {conf_threshold} for {img_path} - skipping.",
+                f"Prediction under confidence threshold {confidence_threshold} for {image_path} - skipping.",
                 category=UserWarning,
                 stacklevel=2,
             )
             continue
         predictions.append(
             {
-                "cls": int(c),
-                "xyxy": [float(b[0]), float(b[1]), float(b[2]), float(b[3])],
-                "conf": float(cf),
+                "cls": int(class_id),
+                "xyxy": [float(box_coords[0]), float(box_coords[1]), float(box_coords[2]), float(box_coords[3])],
+                "conf": float(confidence),
             }
         )
+
     if len(predictions) == 0:
         warnings.warn(
-            f"No predictions found for {img_path}",
+            f"No predictions found for {image_path}",
             category=UserWarning,
             stacklevel=2,
         )
+
     return predictions
 
 
@@ -213,7 +358,7 @@ def evaluate_confusion_matrix(
             continue
 
         gt_objects = get_gt_objects(
-            label_file=label_file, img_path=img_path, img_w=img_w, img_h=img_h
+            label_file=label_file, image_path=img_path, image_width=img_w, image_height=img_h
         )
 
         results = model.predict(
@@ -221,13 +366,13 @@ def evaluate_confusion_matrix(
         )
 
         predictions = get_predictions(
-            results=results, conf_threshold=conf_threshold, img_path=img_path
+            model_results=results, confidence_threshold=conf_threshold, image_path=img_path
         )
         iou_matrix = compute_iou_matrix(gt_objects, predictions)
 
         matched_ground_truth, matched_pred = get_matched_ground_truth_and_predictions(
-            gt_objects=gt_objects,
-            predictions=predictions,
+            ground_truth_objects=gt_objects,
+            predicted_objects=predictions,
             iou_matrix=iou_matrix,
             iou_threshold=iou_threshold,
             confusion_matrix=confusion_matrix,
@@ -245,57 +390,94 @@ def evaluate_confusion_matrix(
 
 
 # ---------------- plotting / normalization ----------------
-def normalize_confusion_matrix(confusion_matrix):
-    with np.errstate(all="ignore"):
-        row_sums = confusion_matrix.sum(axis=1, keepdims=True)
-        normalized = confusion_matrix.astype(float) / row_sums
-        normalized[np.isnan(normalized)] = 0.0
-    return normalized
+def normalize_confusion_matrix(confusion_matrix: np.ndarray) -> np.ndarray:
+    """
+    Normalize a confusion matrix row-wise so that each row sums to 1.
+
+    Args:
+        confusion_matrix (np.ndarray): A 2D array representing the confusion matrix
+            (shape: [num_classes, num_classes]).
+
+    Returns:
+        np.ndarray: Row-normalized confusion matrix with NaNs replaced by 0.0.
+    """
+    row_sums = confusion_matrix.sum(axis=1, keepdims=True)
+    normalized_matrix = confusion_matrix.astype(float) / row_sums
+    normalized_matrix[np.isnan(normalized_matrix)] = 0.0
+    return normalized_matrix
+
 
 
 def plot_and_save_confusion_matrix(
-    confusion_matrix, names, out_path="confusion_matrix.png", title="Confusion Matrix"
+    confusion_matrix: np.ndarray,
+    class_names: list[str],
+    output_path: str = "confusion_matrix.png",
+    title: str = "Confusion Matrix",
 ) -> None:
-    labels = names + ["No Detection"]
+    """
+    Plot and save a confusion matrix as an image.
+
+    Args:
+        confusion_matrix (np.ndarray): 2D array representing the confusion matrix.
+        class_names (list[str]): List of class names corresponding to the confusion matrix rows/columns.
+        output_path (str, optional): File path to save the plotted image. Defaults to "confusion_matrix.png".
+        title (str, optional): Title for the plot. Defaults to "Confusion Matrix".
+    """
+    labels = class_names + ["No Detection"]
     fig, ax = plt.subplots(figsize=(12, 10))
     ax.imshow(confusion_matrix, interpolation="nearest", cmap="Blues")
+
     ax.set_xticks(np.arange(len(labels)))
     ax.set_yticks(np.arange(len(labels)))
     ax.set_xticklabels(labels, rotation=45, ha="right")
     ax.set_yticklabels(labels)
+
     ax.set_xlabel("Predicted")
     ax.set_ylabel("Ground Truth")
     ax.set_title(title)
-    is_float = np.issubdtype(confusion_matrix.dtype, np.floating)
-    for i in range(confusion_matrix.shape[0]):
-        for j in range(confusion_matrix.shape[1]):
-            value = confusion_matrix[i, j]
-            text = f"{value:.2f}" if is_float else f"{int(value)}"
+
+    is_floating_type = np.issubdtype(confusion_matrix.dtype, np.floating)
+
+    for row_idx in range(confusion_matrix.shape[0]):
+        for col_idx in range(confusion_matrix.shape[1]):
+            cell_value = confusion_matrix[row_idx, col_idx]
+            text_label = f"{cell_value:.2f}" if is_floating_type else f"{int(cell_value)}"
             ax.text(
-                j,
-                i,
-                text,
+                col_idx,
+                row_idx,
+                text_label,
                 ha="center",
                 va="center",
-                color="white" if value > confusion_matrix.max() / 2 else "black",
+                color="white" if cell_value > confusion_matrix.max() / 2 else "black",
             )
+
     fig.tight_layout()
-    plt.savefig(out_path, dpi=150)
+    plt.savefig(output_path, dpi=150)
     plt.show()
-    print("Saved confusion matrix image to:", out_path)
+    print("Saved confusion matrix image to:", output_path)
 
 
 def save_confusion_matrix_as_csv(
-    confusion_matrix: np.ndarray, csv_filename: str, output_dir: str
+    confusion_matrix: np.ndarray,
+    csv_filename: str,
+    output_directory: str
 ) -> None:
-    file_path = os.path.join(output_dir, csv_filename)
+    """
+    Save a confusion matrix as a CSV file.
+
+    Args:
+        confusion_matrix (np.ndarray): 2D array representing the confusion matrix.
+        csv_filename (str): Name of the CSV file to save.
+        output_directory (str): Directory path where the CSV file will be saved.
+    """
+    csv_file_path = os.path.join(output_directory, csv_filename)
     np.savetxt(
-        file_path,
+        csv_file_path,
         confusion_matrix,
         fmt="%d",
         delimiter=",",
     )
-    print("Saved CSVs to", file_path)
+    print("Saved CSV to", csv_file_path)
 
 
 def train_model(

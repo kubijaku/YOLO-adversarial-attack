@@ -37,7 +37,7 @@ def test_get_yolo_boxes_missing():
 # yolo_norm_to_xyxy
 # -------------------------
 def test_yolo_norm_to_xyxy():
-    xyxy = yolo_norm_to_xyxy(xc=0.5, yc=0.5, w=0.2, h=0.4, img_w=100, img_h=200)
+    xyxy = yolo_norm_to_xyxy(x_center_norm=0.5, y_center_norm=0.5, width_norm=0.2, height_norm=0.4, image_width=100, image_height=200)
 
     assert np.allclose(xyxy, [40.0, 60.0, 60.0, 140.0])
 
@@ -123,8 +123,8 @@ def test_matching_logic():
     iou_matrix = compute_iou_matrix(gt_objects, predictions)
 
     matched_gt, matched_pred = get_matched_ground_truth_and_predictions(
-        gt_objects=gt_objects,
-        predictions=predictions,
+        ground_truth_objects=gt_objects,
+        predicted_objects=predictions,
         iou_matrix=iou_matrix,
         iou_threshold=0.5,
         confusion_matrix=cm,
