@@ -401,9 +401,14 @@ def normalize_confusion_matrix(confusion_matrix: np.ndarray) -> np.ndarray:
     Returns:
         np.ndarray: Row-normalized confusion matrix with NaNs replaced by 0.0.
     """
-    row_sums = confusion_matrix.sum(axis=1, keepdims=True)
-    normalized_matrix = confusion_matrix.astype(float) / row_sums
-    normalized_matrix[np.isnan(normalized_matrix)] = 0.0
+    # np.errstate(divide='ignore', invalid='ignore'): Temporarily suppresses warnings
+    # from divide-by-zero or invalid operations.
+    with np.errstate(divide='ignore', invalid='ignore'):
+        row_sums = confusion_matrix.sum(axis=1, keepdims=True)
+        normalized_matrix = confusion_matrix.astype(float) / row_sums
+
+        # Replace NaNs that result from rows summing to zero with 0.
+        normalized_matrix[np.isnan(normalized_matrix)] = 0.0
     return normalized_matrix
 
 
