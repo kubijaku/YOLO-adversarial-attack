@@ -25,7 +25,6 @@ The goal is to generate visually small perturbations that are hardly recognizabl
 ### Environment & Tooling
 - **uv** – Dependency management and execution  
 - **Jupyter Notebooks** – Interactive experimentation and prototyping  
-- **Docker** (optional) – Containerized environment for reproducibility  
 
 ---
 
@@ -95,11 +94,10 @@ Launches a notebook server using the uv-managed environment.
 
 ---
 
-### 4. Run Jupyter notebooks
+### 4*. Jupyter notebook
 
-TODO
-
-Launches a notebook server using the uv-managed environment.
+Jupyter notebook is for development purposes only. 
+It is not necessary for correct application work, rather for future improvements in the model work. 
 
 ---
 
@@ -113,6 +111,8 @@ For running the test install additional dependencies
 uv sync --extra dev
 ```
 
+---
+
 ### Run tests
 ```bash
 uv run pytest
@@ -121,28 +121,12 @@ uv run pytest
 ### Run with coverage
 ```bash
 uv run pytest --cov=attack
-
-```
-
-### Run lint + format + typing
-```bash
-uv run ruff format
-uv run ruff check src tests
-uv run mypy src tests
 ```
 
 ### Run only utils tests:
 ```bash
 uv run pytest tests/test_utils.py
 ```
-
-### Reformatting with ruff
-
-```bash
-uv run ruff format
-```
-
-Automatically reformats all Python files in the project.
 
 ---
 
@@ -166,13 +150,26 @@ Detects style issues, unused imports, and other common Python errors.
 
 ---
 
-### Run all quality checks at once
-
+### Run lint + format + typing
 ```bash
-uv run ruff format && uv run mypy src tests && uv run ruff check src tests
+uv run ruff format
+uv run ruff check src tests
+uv run mypy src tests
 ```
 
-This ensures:
+---
+
+### Reformatting with ruff
+
+```bash
+uv run ruff format
+```
+
+Automatically reformats all Python files in the project.
+
+---
+
+Those functions ensures:
 
 * Code is properly formatted
 * Type-safe
@@ -182,16 +179,65 @@ This ensures:
 
 ## Results
 
+
 After running the attack, the following outputs are generated:
 
-* **Adversarial images** (`--adv-img-dir`)
-* **Perturbation maps** (`--pert-dir`)
-* **Perturbation × epsilon visualizations** (`--pert-with-eps-dir`)
-* **Confusion matrices and CSVs** (`--confusion-matrix-dir`)
+* **Adversarial images** 
+* **Perturbation maps** 
+* **Perturbation × epsilon visualizations** 
+* **Confusion matrices and CSVs** 
 
 These outputs allow both **quantitative and qualitative** evaluation of YOLO robustness against FGSM attacks.
 
+### Images 
+
+Example image from the dataset before attack is:
+
+![000059_jpg.rf.b190180521e9edd87152a789fadf42d9.jpg](readme_images/000059_jpg.rf.b190180521e9edd87152a789fadf42d9.jpg)
+
+
+Perturbations generated for an image (before multiplication by epsilon value):
+
+![000059_jpg.rf.b190180521e9edd87152a789fadf42d9_eps8.png](readme_images/pert_img/000059_jpg.rf.b190180521e9edd87152a789fadf42d9_eps8.png)
+
+
+Perturbations added to an image (after multiplication by epsilon value):
+
+![000059_jpg.rf.b190180521e9edd87152a789fadf42d9_eps8.png](readme_images/per_img_with_eps/000059_jpg.rf.b190180521e9edd87152a789fadf42d9_eps8.png)
+
+
+Final adversarial image:
+
+![000059_jpg.rf.b190180521e9edd87152a789fadf42d9_eps8.png](readme_images/adv_img/000059_jpg.rf.b190180521e9edd87152a789fadf42d9_eps8.png)
+
+
+
+### Confusion matrices
+
+For comparing the results after and before attack, confusions matrices were generated.
+
+#### Confusion matrices before attack
+
+| Unnormalized matrix | Normalized matrix |
+|---------------------|-------------------|
+| ![val_dataset_confusion_matrix](readme_images/attack_results/val_dataset_confusion_matrix.png) | ![val_dataset_confusion_matrix_normalized](readme_images/attack_results/val_dataset_confusion_matrix_normalized.png) |
+
+#### Confusion matrices after attack
+
+| Unnormalized matrix | Normalized matrix |
+|---------------------|-------------------|
+| ![adversarial_dataset_confusion_matrix](readme_images/attack_results/adversarial_dataset_confusion_matrix.png) | ![adversarial_dataset_confusion_matrix_normalized](readme_images/attack_results/adversarial_dataset_confusion_matrix_normalized.png) |
+
+We can observe significant decrease in recognition the objects, even though the changes in the images are very small.
+
+
+
 ---
+
+## Future improvements
+
+Containerization with **Docker**, are considered to be implemented in the future, for better reproducibility.
+
 
 ## Notes
 
