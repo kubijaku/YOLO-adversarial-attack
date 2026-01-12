@@ -1,15 +1,16 @@
-import torch
 import argparse
 import os
 
-from attack.fgsm import fgsm_attack
+import torch
 
+from attack.fgsm import fgsm_attack
 from utils.utils import (
+    calculate_accuracy,
     evaluate_confusion_matrix,
     normalize_confusion_matrix,
     plot_and_save_confusion_matrix,
-    train_model,
     save_confusion_matrix_as_csv,
+    train_model,
 )
 
 # ---------------- USER CONFIG ----------------
@@ -259,6 +260,14 @@ def main():
         csv_filename="adversarial_confusion_normalized.csv",
         output_directory=args.confusion_matrix_dir,
     )
+
+    acc_val = calculate_accuracy(confusion_matrix_val)
+    acc_adv = calculate_accuracy(confusion_matrix_adv)
+
+    print(f"{'Dataset':<20} {'Accuracy':>10}")
+    print("-" * 30)
+    print(f"{'Validation':<20} {acc_val:>10.4f}")
+    print(f"{'Adversarial':<20} {acc_adv:>10.4f}")
 
 
 if __name__ == "__main__":

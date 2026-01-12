@@ -2,18 +2,21 @@
 # for validation data with new created adversarial images
 import os
 import warnings
+from pathlib import Path
 from typing import Any
 
-import numpy as np
-from pathlib import Path
-from PIL import Image
 import matplotlib.pyplot as plt
+import numpy as np
+from PIL import Image
 from ultralytics import YOLO
 
 SUFFIXES = {".jpg", ".jpeg", ".png", ".bmp", ".tif", ".tiff"}
 
+
 # ---------------- util functions ----------------
-def get_yolo_boxes(label_file_path: str) -> list[tuple[int, float, float, float, float]]:
+def get_yolo_boxes(
+    label_file_path: str | Path,
+) -> list[tuple[int, float, float, float, float]]:
     """
     Parse a YOLO-format label file and return bounding boxes.
 
@@ -50,7 +53,7 @@ def yolo_norm_to_xyxy(
     width_norm: float,
     height_norm: float,
     image_width: int,
-    image_height: int
+    image_height: int,
 ) -> list[float]:
     """
     Convert YOLO normalized bounding box coordinates to absolute (x1, y1, x2, y2) format.
@@ -79,7 +82,6 @@ def yolo_norm_to_xyxy(
     x2 = x_center_abs + box_width_abs / 2
     y2 = y_center_abs + box_height_abs / 2
     return [x1, y1, x2, y2]
-
 
 
 def iou_xyxy(box_a: list[float], box_b: list[float]) -> float:
@@ -112,7 +114,7 @@ def iou_xyxy(box_a: list[float], box_b: list[float]) -> float:
     return intersection_area / union_area
 
 
-def find_images_recursive(root_dir: str) -> list[str]:
+def find_images_recursive(root_dir: str | Path) -> list[str]:
     """
     Recursively find all image files under the given directory that match known image suffixes.
 
@@ -134,7 +136,8 @@ def find_images_recursive(root_dir: str) -> list[str]:
 
     return sorted(image_files)
 
-def load_images(folder_path: str) -> list[str]:
+
+def load_images(folder_path: str | Path) -> list[str]:
     """
     Load all image file paths from a folder, filtering by common image file extensions.
 
@@ -218,7 +221,9 @@ def get_matched_ground_truth_and_predictions(
     while True:
         if iou_matrix.size == 0:
             break
-        best_gt_idx, best_pred_idx = np.unravel_index(np.argmax(iou_matrix), iou_matrix.shape)
+        best_gt_idx, best_pred_idx = np.unravel_index(
+            np.argmax(iou_matrix), iou_matrix.shape
+        )
         max_iou = iou_matrix[best_gt_idx, best_pred_idx]
         if max_iou < iou_threshold:
             break
@@ -234,7 +239,9 @@ def get_matched_ground_truth_and_predictions(
 
 
 # ---------------- core: evaluate one folder -> return local confusion_matrix ----------------
-def get_gt_objects(label_file: str, image_path: str, image_width: int, image_height: int) -> list[Any]:
+def get_gt_objects(
+    label_file: str, image_path: str, image_width: int, image_height: int
+) -> list[Any]:
     """
     Load ground truth objects from a YOLO label file and convert normalized coordinates to absolute image coordinates.
 
@@ -260,18 +267,23 @@ def get_gt_objects(label_file: str, image_path: str, image_width: int, image_hei
             ground_truth_objects.append(
                 {
                     "cls": int(class_id),
-                    "xyxy": yolo_norm_to_xyxy(x_center, y_center, width, height, image_width, image_height),
+                    "xyxy": yolo_norm_to_xyxy(
+                        x_center, y_center, width, height, image_width, image_height
+                    ),
                 }
             )
     else:
-        print("Warning: no ground truth objects label found for", image_path, "- skipping")
+        print(
+            "Warning: no ground truth objects label found for", image_path, "- skipping"
+        )
         raise LookupError("No ground truth objects label found for the given image")
 
     return ground_truth_objects
 
 
-
-def get_predictions(model_results: list, confidence_threshold: float, image_path: str) -> list[Any]:
+def get_predictions(
+    model_results: list, confidence_threshold: float, image_path: str
+) -> list[Any]:
     """
     Extract predictions from YOLO model results, filtering out low-confidence detections.
 
@@ -298,7 +310,9 @@ def get_predictions(model_results: list, confidence_threshold: float, image_path
     confidences = first_result.boxes.conf.cpu().numpy()
     detected_class_ids = first_result.boxes.cls.cpu().numpy().astype(int)
 
-    for box_coords, class_id, confidence in zip(boxes_xyxy, detected_class_ids, confidences):
+    for box_coords, class_id, confidence in zip(
+        boxes_xyxy, detected_class_ids, confidences
+    ):
         if confidence < confidence_threshold:
             warnings.warn(
                 f"Prediction under confidence threshold {confidence_threshold} for {image_path} - skipping.",
@@ -309,7 +323,12 @@ def get_predictions(model_results: list, confidence_threshold: float, image_path
         predictions.append(
             {
                 "cls": int(class_id),
-                "xyxy": [float(box_coords[0]), float(box_coords[1]), float(box_coords[2]), float(box_coords[3])],
+                "xyxy": [
+                    float(box_coords[0]),
+                    float(box_coords[1]),
+                    float(box_coords[2]),
+                    float(box_coords[3]),
+                ],
                 "conf": float(confidence),
             }
         )
@@ -358,7 +377,10 @@ def evaluate_confusion_matrix(
             continue
 
         gt_objects = get_gt_objects(
-            label_file=label_file, image_path=img_path, image_width=img_w, image_height=img_h
+            label_file=label_file,
+            image_path=img_path,
+            image_width=img_w,
+            image_height=img_h,
         )
 
         results = model.predict(
@@ -366,7 +388,9 @@ def evaluate_confusion_matrix(
         )
 
         predictions = get_predictions(
-            model_results=results, confidence_threshold=conf_threshold, image_path=img_path
+            model_results=results,
+            confidence_threshold=conf_threshold,
+            image_path=img_path,
         )
         iou_matrix = compute_iou_matrix(gt_objects, predictions)
 
@@ -403,14 +427,13 @@ def normalize_confusion_matrix(confusion_matrix: np.ndarray) -> np.ndarray:
     """
     # np.errstate(divide='ignore', invalid='ignore'): Temporarily suppresses warnings
     # from divide-by-zero or invalid operations.
-    with np.errstate(divide='ignore', invalid='ignore'):
+    with np.errstate(divide="ignore", invalid="ignore"):
         row_sums = confusion_matrix.sum(axis=1, keepdims=True)
         normalized_matrix = confusion_matrix.astype(float) / row_sums
 
         # Replace NaNs that result from rows summing to zero with 0.
         normalized_matrix[np.isnan(normalized_matrix)] = 0.0
     return normalized_matrix
-
 
 
 def plot_and_save_confusion_matrix(
@@ -446,7 +469,9 @@ def plot_and_save_confusion_matrix(
     for row_idx in range(confusion_matrix.shape[0]):
         for col_idx in range(confusion_matrix.shape[1]):
             cell_value = confusion_matrix[row_idx, col_idx]
-            text_label = f"{cell_value:.2f}" if is_floating_type else f"{int(cell_value)}"
+            text_label = (
+                f"{cell_value:.2f}" if is_floating_type else f"{int(cell_value)}"
+            )
             ax.text(
                 col_idx,
                 row_idx,
@@ -463,9 +488,7 @@ def plot_and_save_confusion_matrix(
 
 
 def save_confusion_matrix_as_csv(
-    confusion_matrix: np.ndarray,
-    csv_filename: str,
-    output_directory: str
+    confusion_matrix: np.ndarray, csv_filename: str, output_directory: str
 ) -> None:
     """
     Save a confusion matrix as a CSV file.
@@ -489,8 +512,8 @@ def train_model(
     model_path: str = "../model/yolov8n.pt",
     data_yaml: str = "./car/data.yaml",
     device: str = "mps",
-    epochs: int = 30,
-    batch: int = 10,
+    epochs: int = 100,
+    batch: int = 20,
 ) -> dict:
     """
     Function to train the YOLO model
@@ -515,3 +538,21 @@ def train_model(
 
     model_dir = final_model.save_dir
     return model_dir
+
+
+def calculate_accuracy(confusion_matrix: np.ndarray) -> float:
+    """
+    Calculate classification accuracy from a confusion matrix.
+
+    Accuracy = (sum of diagonal elements) / (sum of all elements)
+    """
+    if confusion_matrix.size == 0:
+        raise ValueError("Confusion matrix must not be empty.")
+
+    correct_predictions = np.trace(confusion_matrix)
+    total_predictions = np.sum(confusion_matrix)
+
+    if total_predictions == 0:
+        raise ValueError("Total number of predictions must be greater than zero.")
+
+    return correct_predictions / total_predictions

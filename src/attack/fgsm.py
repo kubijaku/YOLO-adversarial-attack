@@ -8,10 +8,12 @@ import torch.nn.functional as F
 from PIL import Image
 from ultralytics import YOLO
 
-from utils.utils import get_yolo_boxes, find_images_recursive
+from utils.utils import find_images_recursive, get_yolo_boxes
 
 
-def load_image_tensor(image_path: str, device: str) -> Tuple[torch.Tensor, np.ndarray]:
+def load_image_tensor(
+    image_path: str | Path, device: str
+) -> Tuple[torch.Tensor, np.ndarray]:
     """
     Loads an image from disk and converts it to both a PyTorch tensor and a NumPy array.
 
@@ -26,11 +28,13 @@ def load_image_tensor(image_path: str, device: str) -> Tuple[torch.Tensor, np.nd
     """
     pil_image = Image.open(image_path).convert("RGB")
     image_array = np.array(pil_image).astype(np.float32) / 255.0
-    image_tensor = torch.from_numpy(image_array).permute(2, 0, 1).unsqueeze(0).to(device)  # (1, 3, H, W)
+    image_tensor = (
+        torch.from_numpy(image_array).permute(2, 0, 1).unsqueeze(0).to(device)
+    )  # (1, 3, H, W)
     return image_tensor, image_array
 
 
-def save_tensor_image(tensor: torch.Tensor, output_path: str) -> None:
+def save_tensor_image(tensor: torch.Tensor, output_path: str | Path) -> None:
     """
     Saves a PyTorch tensor as an image file.
 
@@ -47,7 +51,9 @@ def save_tensor_image(tensor: torch.Tensor, output_path: str) -> None:
     image.save(output_path)
 
 
-def read_yolo_label_file(label_file_path) -> list[tuple[int, float, float, float, float]]:
+def read_yolo_label_file(
+    label_file_path,
+) -> list[tuple[int, float, float, float, float]]:
     """
     Reads a YOLO-format label file and returns a list of bounding boxes.
 
@@ -71,7 +77,6 @@ def read_yolo_label_file(label_file_path) -> list[tuple[int, float, float, float
                 yolo_boxes.append((class_id, x_center, y_center, width, height))
 
     return yolo_boxes
-
 
 
 def flatten_pred_tensor(prediction_tensor: torch.Tensor) -> torch.Tensor:
@@ -143,18 +148,14 @@ def compute_proxy_from_preds(
         raise RuntimeError("Unsupported preds type")
 
     torch_device = (
-        prediction_tensors[0].device
-        if prediction_tensors
-        else torch.device(device)
+        prediction_tensors[0].device if prediction_tensors else torch.device(device)
     )
     total_loss = torch.tensor(0.0, device=torch_device)
 
     per_head_scores = []
     for prediction_tensor in prediction_tensors:
         try:
-            flattened_predictions = flatten_pred_tensor(
-                prediction_tensor
-            )  # (B, P, C)
+            flattened_predictions = flatten_pred_tensor(prediction_tensor)  # (B, P, C)
         except Exception:
             # fallback: convert to float and sum
             total_loss = total_loss + prediction_tensor.float().abs().sum()
@@ -192,9 +193,7 @@ def compute_proxy_from_preds(
         for class_id, center_x, center_y, width, height in gt_boxes:
             best_scores_per_head = []
             for head_scores in per_head_scores:
-                best_scores_per_head.append(
-                    head_scores.max(dim=1).values
-                )  # (B,)
+                best_scores_per_head.append(head_scores.max(dim=1).values)  # (B,)
 
             if not best_scores_per_head:
                 continue
@@ -202,9 +201,7 @@ def compute_proxy_from_preds(
             stacked_scores = torch.stack(best_scores_per_head, dim=0)  # (num_heads, B)
             max_scores_across_heads = stacked_scores.max(dim=0).values  # (B,)
 
-            total_loss = total_loss + (
-                -torch.log(max_scores_across_heads + 1e-6)
-            ).sum()
+            total_loss = total_loss + (-torch.log(max_scores_across_heads + 1e-6)).sum()
     else:
         # no GT: just sum all per-head scores (we will maximize this)
         for head_scores in per_head_scores:
@@ -312,7 +309,14 @@ def fgsm_attack(
             # maximize loss -> gradient step in direction of sign(grad)
             loss.backward()
 
-            gradient_tensor = image_tensor.grad.data
+            gradient = image_tensor.grad
+
+            if gradient is None:
+                print(" - No gradient computed (None). Skipping.")
+                continue
+
+            gradient_tensor = gradient.data
+
             if gradient_tensor is None:
                 print(" - No gradient computed (None). Skipping.")
                 continue

@@ -1,4 +1,3 @@
-import os
 from pathlib import Path
 
 import numpy as np
@@ -37,7 +36,14 @@ def test_get_yolo_boxes_missing():
 # yolo_norm_to_xyxy
 # -------------------------
 def test_yolo_norm_to_xyxy():
-    xyxy = yolo_norm_to_xyxy(x_center_norm=0.5, y_center_norm=0.5, width_norm=0.2, height_norm=0.4, image_width=100, image_height=200)
+    xyxy = yolo_norm_to_xyxy(
+        x_center_norm=0.5,
+        y_center_norm=0.5,
+        width_norm=0.2,
+        height_norm=0.4,
+        image_width=100,
+        image_height=200,
+    )
 
     assert np.allclose(xyxy, [40.0, 60.0, 60.0, 140.0])
 
