@@ -102,7 +102,8 @@ def test_flatten_pred_tensor_invalid_type():
 # -------------------------
 def test_compute_proxy_from_preds_no_gt():
     pred = torch.randn(1, 10, 4, 4)
-    loss = compute_proxy_from_preds(pred, device="cpu")
+    gt_boxes = [(0, 0.5, 0.5, 0.2, 0.2)]
+    loss = compute_proxy_from_preds(pred, device="cpu", gt_boxes=gt_boxes)
 
     assert isinstance(loss, torch.Tensor)
     assert loss.ndim == 0

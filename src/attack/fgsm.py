@@ -1,6 +1,6 @@
 import os
 from pathlib import Path
-from typing import Tuple
+from typing import Any, Tuple
 
 import numpy as np
 import torch
@@ -122,10 +122,42 @@ def flatten_pred_tensor(prediction_tensor: torch.Tensor) -> torch.Tensor:
     return flattened_tensor
 
 
+def calculate_total_loss(
+    gt_boxes: list[tuple[int, float, float, float, float]],
+    per_head_scores: list[Any],
+    device: str | torch._C.device,
+) -> torch.Tensor:
+    """
+    Aggregates per-head scores into a single loss
+    If ground truth boxes available, penalize the model's highest score for those classes.
+    """
+    total_loss: torch.Tensor = torch.tensor(0.0, device=device)
+    if gt_boxes:
+        # For each GT class, find its best score across all heads & preds
+        for _ in gt_boxes:
+            best_scores_per_head = []
+            for head_scores in per_head_scores:
+                best_scores_per_head.append(head_scores.max(dim=1).values)  # (B,)
+
+            if not best_scores_per_head:
+                continue
+
+            stacked_scores = torch.stack(best_scores_per_head, dim=0)  # (num_heads, B)
+            max_scores_across_heads = stacked_scores.max(dim=0).values  # (B,)
+
+            total_loss = total_loss + (-torch.log(max_scores_across_heads + 1e-6)).sum()
+    else:
+        # no GT: just sum all per-head scores (we will maximize this)
+        for head_scores in per_head_scores:
+            total_loss = total_loss + head_scores.sum()
+
+    return total_loss
+
+
 def compute_proxy_from_preds(
     raw_predictions,
     device: str | torch._C.device,
-    gt_boxes=None,
+    gt_boxes: list[tuple[int, float, float, float, float]],
 ) -> torch.Tensor:
     """
     raw_predictions: either torch.Tensor or list/tuple of tensors (various shapes).
@@ -186,26 +218,7 @@ def compute_proxy_from_preds(
 
         per_head_scores.append(detection_scores)
 
-    # Now aggregate per-head scores into a single loss
-    # If ground truth boxes available, penalize the model's highest score for those classes.
-    if gt_boxes:
-        # For each GT class, find its best score across all heads & preds
-        for class_id, center_x, center_y, width, height in gt_boxes:
-            best_scores_per_head = []
-            for head_scores in per_head_scores:
-                best_scores_per_head.append(head_scores.max(dim=1).values)  # (B,)
-
-            if not best_scores_per_head:
-                continue
-
-            stacked_scores = torch.stack(best_scores_per_head, dim=0)  # (num_heads, B)
-            max_scores_across_heads = stacked_scores.max(dim=0).values  # (B,)
-
-            total_loss = total_loss + (-torch.log(max_scores_across_heads + 1e-6)).sum()
-    else:
-        # no GT: just sum all per-head scores (we will maximize this)
-        for head_scores in per_head_scores:
-            total_loss = total_loss + head_scores.sum()
+    total_loss = calculate_total_loss(gt_boxes, per_head_scores, device)
 
     return total_loss
 
