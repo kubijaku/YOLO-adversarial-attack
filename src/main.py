@@ -170,11 +170,7 @@ def main():
             args.confusion_matrix_dir,
         ]
     )
-
-    if args.train:
-        model_dir = train_model()
-    else:
-        model_dir = args.model
+    model_dir = train_model() if args.train else args.model
 
     fgsm_attack(
         model_path=model_dir,
